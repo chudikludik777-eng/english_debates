@@ -1,0 +1,12 @@
+{
+  "name": "oxus-debate-league",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Website and Telegram application flow for Oxus Debate League",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
