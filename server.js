@@ -347,6 +347,10 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "GET") {
+      if (url.pathname === "/health") {
+        sendJson(response, 200, { ok: true });
+        return;
+      }
       await serveStatic(response, url.pathname);
       return;
     }
