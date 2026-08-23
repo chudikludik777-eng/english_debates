@@ -179,10 +179,20 @@ async function notifyPendingApplications() {
 
 async function handleTelegramUpdate(update) {
   const message = update.message;
-  if (!message || !message.from || message.chat?.type !== "private") return;
+  if (!message || !message.from) return;
+
+  const text = message.text || "";
+  if (/^\/id(?:@\w+)?$/.test(text)) {
+    await telegram("sendMessage", {
+      chat_id: message.chat.id,
+      text: `ID этого чата: ${message.chat.id}`,
+    });
+    return;
+  }
+
+  if (message.chat?.type !== "private") return;
 
   const applications = await readApplications();
-  const text = message.text || "";
   const startMatch = text.match(/^\/start(?:@\w+)?\s+odl_([a-zA-Z0-9-]+)$/);
 
   if (startMatch) {
