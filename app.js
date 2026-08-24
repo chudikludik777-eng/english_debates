@@ -7,7 +7,7 @@
 const ODL_CONFIG = {
   botUsername: "chort11111bot",
   registrationEndpoint: "/api/applications",
-  instagramUrl: "https://instagram.com/oxusdebateleague",
+  instagramUrl: "https://www.instagram.com/oxus.debate",
 };
 
 const form = document.querySelector("#application-form");
