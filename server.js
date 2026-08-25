@@ -45,6 +45,8 @@ const TELEGRAM_ADMIN_USER_IDS = new Set(
 );
 const TELEGRAM_WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET || "";
 const TELEGRAM_USE_POLLING = process.env.TELEGRAM_USE_POLLING !== "false";
+const TOURNAMENT_START = new Date("2026-11-29T09:00:00.000Z");
+let remindersRunning = false;
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -212,6 +214,48 @@ async function sendParticipantMenu(chatId, text = "Выбери нужный р�
   });
 }
 
+async function sendAdminMenu(chatId) {
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text: "Панель организатора",
+    reply_markup: {
+      inline_keyboard: [[{ text: "Заявки и статистика", callback_data: "admin_applications" }]],
+    },
+  });
+}
+
+async function handleAdminMenu(callbackQuery) {
+  if (callbackQuery.data !== "admin_applications") return false;
+  if (!TELEGRAM_ADMIN_USER_IDS.has(String(callbackQuery.from.id))) {
+    await telegram("answerCallbackQuery", { callback_query_id: callbackQuery.id, text: "Нет доступа" });
+    return true;
+  }
+
+  await telegram("answerCallbackQuery", { callback_query_id: callbackQuery.id });
+  const applications = await readApplications();
+  const counts = applications.reduce((result, application) => {
+    result[application.status] = (result[application.status] || 0) + 1;
+    return result;
+  }, {});
+  const rows = applications.slice(-20).reverse().map((application) =>
+    `${application.name} — ${application.status}${application.team === "Нет, ищу команду" ? " — без команды" : ""}`
+  );
+  await telegram("sendMessage", {
+    chat_id: callbackQuery.message.chat.id,
+    text: [
+      "АДМИН-ПАНЕЛЬ",
+      "",
+      `Всего заявок: ${applications.length}`,
+      `Подтверждены: ${counts.confirmed || 0}`,
+      `Приняты: ${counts.accepted || 0}`,
+      `Без команды: ${applications.filter((application) => application.team === "Нет, ищу команду").length}`,
+      "",
+      rows.length ? rows.join("\n") : "Заявок пока нет.",
+    ].join("\n"),
+  });
+  return true;
+}
+
 async function handleParticipantMenu(callbackQuery) {
   const chatId = callbackQuery.message?.chat.id;
   if (!chatId) return;
@@ -319,6 +363,7 @@ async function handleOrganiserDecision(callbackQuery) {
 
 async function handleTelegramUpdate(update) {
   if (update.callback_query) {
+    if (await handleAdminMenu(update.callback_query)) return;
     if (await handleOrganiserDecision(update.callback_query)) return;
     await handleParticipantMenu(update.callback_query);
     return;
@@ -378,6 +423,9 @@ async function handleTelegramUpdate(update) {
           text: "Чтобы начать регистрацию, вернись на сайт Oxus Debate League и нажми «Продолжить в Telegram» после заполнения формы.",
         });
       }
+      if (TELEGRAM_ADMIN_USER_IDS.has(String(message.from.id))) {
+        await sendAdminMenu(message.chat.id);
+      }
     }
     return;
   }
@@ -406,6 +454,48 @@ async function handleTelegramUpdate(update) {
       reply_markup: { remove_keyboard: true },
     });
     await sendParticipantMenu(message.chat.id);
+    if (TELEGRAM_ADMIN_USER_IDS.has(String(message.from.id))) {
+      await sendAdminMenu(message.chat.id);
+    }
+  }
+}
+
+async function sendScheduledReminders() {
+  if (remindersRunning) return;
+  const now = Date.now();
+  const reminders = [
+    { key: "reminder7Sent", at: TOURNAMENT_START.getTime() - 7 * 24 * 60 * 60 * 1000, text: "Напоминание: турнир начнётся через 7 дней — 29 ноября в 15:00 по Бишкеку." },
+    { key: "reminder3Sent", at: TOURNAMENT_START.getTime() - 3 * 24 * 60 * 60 * 1000, text: "Напоминание: турнир начнётся через 3 дня — 29 ноября в 15:00 по Бишкеку." },
+  ];
+  remindersRunning = true;
+  try {
+    const applications = await readApplications();
+    const due = reminders.find((reminder) =>
+      now >= reminder.at && now < TOURNAMENT_START.getTime() &&
+      applications.some((application) =>
+        application.telegram?.userId &&
+        ["confirmed", "accepted"].includes(application.status) &&
+        !application[reminder.key]
+      )
+    );
+    if (!due) return;
+
+    for (const application of applications) {
+      if (
+        !application.telegram?.userId ||
+        !["confirmed", "accepted"].includes(application.status) ||
+        application[due.key]
+      ) continue;
+      try {
+        await telegram("sendMessage", { chat_id: application.telegram.userId, text: due.text });
+        application[due.key] = true;
+      } catch (error) {
+        console.error(`Could not send ${due.key} to ${application.id}:`, error.message);
+      }
+    }
+    await writeApplications(applications);
+  } finally {
+    remindersRunning = false;
   }
 }
 
@@ -515,6 +605,9 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log(`Oxus Debate League is running at http://localhost:${PORT}`);
   if (TELEGRAM_BOT_TOKEN && TELEGRAM_USE_POLLING) {
     startTelegramPolling();
+    setInterval(() => {
+      sendScheduledReminders().catch((error) => console.error("Reminder scheduler error:", error.message));
+    }, 60_000);
   } else if (!TELEGRAM_BOT_TOKEN) {
     console.warn("Telegram bot is not configured. Add TELEGRAM_BOT_TOKEN to .env.");
   }
