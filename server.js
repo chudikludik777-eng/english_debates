@@ -177,7 +177,84 @@ async function notifyPendingApplications() {
   if (changed) await writeApplications(applications);
 }
 
+async function sendParticipantMenu(chatId, text = "Выбери нужный раздел:") {
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text,
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "Моя заявка", callback_data: "application" },
+          { text: "Правила", callback_data: "rules" },
+        ],
+        [
+          { text: "Расписание", callback_data: "schedule" },
+          { text: "Помощь", callback_data: "help" },
+        ],
+      ],
+    },
+  });
+}
+
+async function handleParticipantMenu(callbackQuery) {
+  const chatId = callbackQuery.message?.chat.id;
+  if (!chatId) return;
+
+  await telegram("answerCallbackQuery", { callback_query_id: callbackQuery.id });
+  const applications = await readApplications();
+  let text;
+
+  if (callbackQuery.data === "application") {
+    const application = [...applications].reverse().find(
+      (item) => item.telegram?.userId === callbackQuery.from.id
+    );
+    text = application
+      ? [
+          "МОЯ ЗАЯВКА",
+          "",
+          `Имя: ${application.name}`,
+          `Школа: ${application.school}`,
+          `Команда: ${application.team}`,
+          `Статус: ${application.status}`,
+          "Дата турнира: 29 ноября 2026 года",
+        ].join("\n")
+      : "Заявка не найдена. Сначала подай заявку на сайте ODL.";
+  } else if (callbackQuery.data === "rules") {
+    text = [
+      "ПРАВИЛА ИНФОРМАЦИЯ О ТУРНИРЕ",
+      "",
+      "Турнир проходит онлайн на английском языке.",
+      "Дата: 29 ноября 2026 года.",
+      "Начало: 15:00 по Бишкеку.",
+      "Длительность: 4 часа или больше.",
+      "Участие бесплатное.",
+      "Участник должен соблюдать уважительное поведение и указания организаторов.",
+    ].join("\n");
+  } else if (callbackQuery.data === "schedule") {
+    text = [
+      "РАСПИСАНИЕ",
+      "",
+      "29 ноября 2026 года",
+      "Начало: 15:00 по Бишкеку",
+      "Платформа: Google Meet",
+      "Длительность: 4 часа или больше",
+      "Подробное расписание раундов будет опубликовано позже.",
+    ].join("\n");
+  } else if (callbackQuery.data === "help") {
+    text = "По вопросам напиши организатору: @ilnmh";
+  } else {
+    return;
+  }
+
+  await sendParticipantMenu(chatId, text);
+}
+
 async function handleTelegramUpdate(update) {
+  if (update.callback_query) {
+    await handleParticipantMenu(update.callback_query);
+    return;
+  }
+
   const message = update.message;
   if (!message || !message.from) return;
 
@@ -221,10 +298,17 @@ async function handleTelegramUpdate(update) {
     if (pendingApplication) {
       await sendStartMessage(message, pendingApplication);
     } else {
-      await telegram("sendMessage", {
-        chat_id: message.chat.id,
-        text: "Чтобы начать регистрацию, вернись на сайт Oxus Debate League и нажми «Продолжить в Telegram» после заполнения формы.",
-      });
+      const confirmedApplication = applications.find(
+        (item) => item.status === "confirmed" && item.telegram?.userId === message.from.id
+      );
+      if (confirmedApplication) {
+        await sendParticipantMenu(message.chat.id);
+      } else {
+        await telegram("sendMessage", {
+          chat_id: message.chat.id,
+          text: "Чтобы начать регистрацию, вернись на сайт Oxus Debate League и нажми «Продолжить в Telegram» после заполнения формы.",
+        });
+      }
     }
     return;
   }
@@ -252,6 +336,7 @@ async function handleTelegramUpdate(update) {
       text: "Готово — твоя заявка подтверждена! ✦\n\nМы пришлём расписание, правила и все новости прямо сюда. До встречи на Oxus Debate League.",
       reply_markup: { remove_keyboard: true },
     });
+    await sendParticipantMenu(message.chat.id);
   }
 }
 
@@ -281,7 +366,7 @@ async function startTelegramPolling() {
       const updates = await telegram("getUpdates", {
         offset,
         timeout: 30,
-        allowed_updates: ["message"],
+        allowed_updates: ["message", "callback_query"],
       });
       for (const update of updates) {
         offset = update.update_id + 1;
