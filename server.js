@@ -37,6 +37,12 @@ const APPLICATIONS_FILE = path.join(DATA_DIR, "applications.json");
 const PORT = Number(process.env.PORT || 4173);
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 const TELEGRAM_ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID || "";
+const TELEGRAM_ADMIN_USER_IDS = new Set(
+  (process.env.TELEGRAM_ADMIN_USER_IDS || "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean)
+);
 const TELEGRAM_WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET || "";
 const TELEGRAM_USE_POLLING = process.env.TELEGRAM_USE_POLLING !== "false";
 
@@ -144,6 +150,15 @@ function organiserCard(application) {
   ].join("\n");
 }
 
+function organiserActions(applicationId) {
+  return {
+    inline_keyboard: [[
+      { text: "Принять заявку", callback_data: `accept_application:${applicationId}` },
+      { text: "Отклонить заявку", callback_data: `reject_application:${applicationId}` },
+    ]],
+  };
+}
+
 async function notifyOrganisers(application) {
   if (!TELEGRAM_ADMIN_CHAT_ID) {
     console.warn("Application confirmed, but TELEGRAM_ADMIN_CHAT_ID is not set.");
@@ -155,6 +170,7 @@ async function notifyOrganisers(application) {
       text: organiserCard(application),
       parse_mode: "HTML",
       disable_web_page_preview: true,
+      reply_markup: organiserActions(application.id),
     });
     return true;
   } catch (error) {
@@ -249,8 +265,61 @@ async function handleParticipantMenu(callbackQuery) {
   await sendParticipantMenu(chatId, text);
 }
 
+async function handleOrganiserDecision(callbackQuery) {
+  const match = callbackQuery.data?.match(/^(accept|reject)_application:([a-zA-Z0-9-]+)$/);
+  if (!match) return false;
+
+  await telegram("answerCallbackQuery", { callback_query_id: callbackQuery.id });
+  if (!TELEGRAM_ADMIN_USER_IDS.has(String(callbackQuery.from.id))) {
+    await telegram("sendMessage", {
+      chat_id: callbackQuery.message.chat.id,
+      text: "У тебя нет доступа к управлению заявками.",
+    });
+    return true;
+  }
+
+  const applications = await readApplications();
+  const application = applications.find((item) => item.id === match[2]);
+  if (!application) {
+    await telegram("sendMessage", { chat_id: callbackQuery.message.chat.id, text: "Заявка не найдена." });
+    return true;
+  }
+
+  if (application.status !== "confirmed") {
+    await telegram("sendMessage", {
+      chat_id: callbackQuery.message.chat.id,
+      text: `Заявка уже обработана. Текущий статус: ${application.status}`,
+    });
+    return true;
+  }
+
+  const accepted = match[1] === "accept";
+  application.status = accepted ? "accepted" : "rejected";
+  application.reviewedAt = new Date().toISOString();
+  application.reviewedBy = callbackQuery.from.id;
+  await writeApplications(applications);
+
+  await telegram("editMessageReplyMarkup", {
+    chat_id: callbackQuery.message.chat.id,
+    message_id: callbackQuery.message.message_id,
+    reply_markup: { inline_keyboard: [] },
+  });
+  await telegram("sendMessage", {
+    chat_id: application.telegram.userId,
+    text: accepted
+      ? "Твоя заявка принята! Мы пришлём расписание и ссылку на Google Meet в Telegram."
+      : "Твоя заявка отклонена. Если хочешь уточнить причину, напиши организатору: @ilnmh",
+  });
+  await telegram("sendMessage", {
+    chat_id: callbackQuery.message.chat.id,
+    text: `Готово: заявка ${accepted ? "принята" : "отклонена"}.`,
+  });
+  return true;
+}
+
 async function handleTelegramUpdate(update) {
   if (update.callback_query) {
+    if (await handleOrganiserDecision(update.callback_query)) return;
     await handleParticipantMenu(update.callback_query);
     return;
   }
