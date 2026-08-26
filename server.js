@@ -122,6 +122,63 @@ async function telegram(method, payload) {
   return result.result;
 }
 
+async function sendApplicationsBackup() {
+  if (!TELEGRAM_ADMIN_CHAT_ID) return;
+
+  try {
+    const applications = await readApplications();
+    const form = new FormData();
+    form.append("chat_id", TELEGRAM_ADMIN_CHAT_ID);
+    form.append("caption", `Резервная копия заявок: ${new Date().toLocaleString("ru-RU")}`);
+    form.append(
+      "document",
+      new Blob([JSON.stringify(applications, null, 2)], { type: "application/json" }),
+      "applications.json"
+    );
+    const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument`, {
+      method: "POST",
+      body: form,
+    });
+    const result = await response.json();
+    if (!result.ok) throw new Error(result.description || "Telegram backup request failed.");
+  } catch (error) {
+    console.error("Could not send applications backup:", error.message);
+  }
+}
+
+async function restoreApplicationsFromDocument(message) {
+  if (
+    message.chat?.id.toString() !== TELEGRAM_ADMIN_CHAT_ID ||
+    !TELEGRAM_ADMIN_USER_IDS.has(String(message.from.id)) ||
+    !message.document
+  ) return false;
+
+  if (message.document.file_name !== "applications.json") {
+    await telegram("sendMessage", { chat_id: message.chat.id, text: "Нужен файл с именем applications.json." });
+    return true;
+  }
+
+  try {
+    const file = await telegram("getFile", { file_id: message.document.file_id });
+    const response = await fetch(`https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${file.file_path}`);
+    const applications = JSON.parse(await response.text());
+    if (
+      !Array.isArray(applications) ||
+      applications.some((application) => !application || typeof application !== "object" || typeof application.id !== "string")
+    ) throw new Error("Файл имеет неверный формат.");
+
+    await writeApplications(applications);
+    await telegram("sendMessage", {
+      chat_id: message.chat.id,
+      text: `Данные восстановлены. Заявок: ${applications.length}.`,
+    });
+  } catch (error) {
+    console.error("Could not restore applications:", error.message);
+    await telegram("sendMessage", { chat_id: message.chat.id, text: "Не удалось восстановить JSON: проверь файл." });
+  }
+  return true;
+}
+
 async function sendStartMessage(message, application) {
   await telegram("sendMessage", {
     chat_id: message.chat.id,
@@ -372,6 +429,8 @@ async function handleTelegramUpdate(update) {
   const message = update.message;
   if (!message || !message.from) return;
 
+  if (await restoreApplicationsFromDocument(message)) return;
+
   const text = message.text || "";
   if (/^\/id(?:@\w+)?$/.test(text)) {
     await telegram("sendMessage", {
@@ -457,6 +516,7 @@ async function handleTelegramUpdate(update) {
     if (TELEGRAM_ADMIN_USER_IDS.has(String(message.from.id))) {
       await sendAdminMenu(message.chat.id);
     }
+    await sendApplicationsBackup();
   }
 }
 
