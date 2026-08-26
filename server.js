@@ -451,6 +451,23 @@ async function handleTelegramUpdate(update) {
       await telegram("sendMessage", { chat_id: message.chat.id, text: "Не нашёл эту заявку. Вернись на сайт ODL и отправь форму ещё раз." });
       return;
     }
+
+    const existingApplication = applications.find(
+      (item) => item.id !== application.id && item.telegram?.userId === message.from.id
+    );
+    if (existingApplication) {
+      await telegram("sendMessage", {
+        chat_id: message.chat.id,
+        text: `Ты уже зарегистрирован в этом турнире. Текущий статус заявки: ${existingApplication.status}. Повторная регистрация не нужна.`,
+      });
+      return;
+    }
+
+    if (["confirmed", "accepted", "rejected"].includes(application.status)) {
+      await sendParticipantMenu(message.chat.id);
+      return;
+    }
+
     application.status = "awaiting_contact";
     application.telegram = {
       userId: message.from.id,
