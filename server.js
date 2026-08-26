@@ -32,7 +32,7 @@ function loadEnvironment() {
 
 loadEnvironment();
 
-const DATA_DIR = path.join(ROOT_DIR, "data");
+const DATA_DIR = process.env.DATA_DIR || path.join(ROOT_DIR, "data");
 const APPLICATIONS_FILE = path.join(DATA_DIR, "applications.json");
 const PORT = Number(process.env.PORT || 4173);
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
